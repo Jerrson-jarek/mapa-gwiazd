@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mapa gwiazd 3D – własne flagi na gwiazdach i planetach</title>
+  <meta name="description" content="Interaktywna mapa gwiazd 3D w przeglądarce: obracanie i przybliżanie myszą, wyszukiwanie po nazwie, planety Układu Słonecznego oraz własne flagi i opisy przypisywane do gwiazd i planet, zapisywane w przeglądarce.">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23070b16'/%3E%3Cpath d='M11 26V6' stroke='%23cfd8ee' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M12 7l14 5-14 5z' fill='%23ffcf6b'/%3E%3Ccircle cx='11' cy='26' r='2.2' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css?v=3">
+  <!-- importmap musi stać przed modulepreload: inaczej część przeglądarek go ignoruje -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js">
+  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/controls/OrbitControls.js">
+  <link rel="preload" as="fetch" crossorigin href="data/stars.json?v=1">
+</head>
+<body>
+  <div id="stage" class="stage" aria-label="Trójwymiarowa mapa gwiazd i Układu Słonecznego">
+    <canvas id="scene"></canvas>
+    <div id="overlay" class="overlay">
+      <div id="ringLabels"></div>
+      <div id="starLabels"></div>
+      <div id="planetLayer" hidden></div>
+      <div id="hoverMarker" class="marker marker--hover" hidden></div>
+      <div id="selectMarker" class="marker marker--selected" hidden></div>
+      <div id="flagLayer"></div>
+    </div>
+  </div>
+  <div class="vignette" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand panel">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><path d="M11 27V5" stroke="#cfd8ee" stroke-width="2" stroke-linecap="round"/><path d="M12 6l15 5.5L12 17z" fill="#ffcf6b"/><circle cx="11" cy="27" r="2.4" fill="#fff"/></svg>
+      <div>
+        <h1>Mapa gwiazd 3D</h1>
+        <p id="brandSub">wczytywanie…</p>
+      </div>
+    </div>
+    <div class="search panel" id="searchBox">
+      <svg class="search__icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15.5 15.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input id="search" type="text" role="combobox" aria-expanded="false" aria-controls="results" aria-autocomplete="list"
+             aria-label="Szukaj gwiazdy lub planety po nazwie" placeholder="Szukaj gwiazdy lub planety: Syriusz, Jowisz, alfa Centauri…" autocomplete="off" spellcheck="false" maxlength="60">
+      <kbd class="search__kbd" aria-hidden="true">/</kbd>
+      <ul id="results" class="results" role="listbox" aria-label="Wyniki wyszukiwania" hidden></ul>
+    </div>
+  </header>
+
+  <aside id="flagsPanel" class="panel flags-panel" aria-label="Moje flagi">
+    <button type="button" class="panel__head" id="flagsToggle" aria-expanded="true" aria-controls="flagsBody">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 21V3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M7 4l12 4.5L7 13z" fill="#ffcf6b"/></svg>
+      <span>Moje flagi</span>
+      <span class="badge" id="flagCount">0</span>
+      <svg class="chev" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div class="panel__body" id="flagsBody">
+      <p class="empty" id="flagsEmpty">Nie masz jeszcze żadnej flagi. Kliknij dowolną gwiazdę lub planetę i wybierz „Przypisz flagę”.</p>
+      <ul id="flagList" class="flag-list"></ul>
+      <div class="row row--split">
+        <button type="button" class="btn btn--ghost btn--sm" id="exportBtn" title="Zapisz wszystkie flagi do pliku JSON (kopia zapasowa)">Eksportuj do pliku</button>
+        <button type="button" class="btn btn--ghost btn--sm" id="importBtn" title="Wczytaj flagi z pliku JSON">Importuj z pliku</button>
+        <input type="file" id="importFile" accept="application/json,.json" hidden>
+      </div>
+    </div>
+  </aside>
+
+  <aside id="info" class="panel info" aria-label="Wybrana gwiazda" aria-live="polite" hidden>
+    <button type="button" class="icon-btn info__close" id="infoClose" aria-label="Odznacz (Esc)" title="Odznacz (Esc)">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+    <p class="eyebrow" id="infoEyebrow">Wybrana gwiazda</p>
+    <h2 id="infoName"></h2>
+    <p class="info__sub" id="infoSub"></p>
+    <dl class="facts" id="infoFacts"></dl>
+    <section class="flag-box" id="flagBox"></section>
+    <button type="button" class="btn btn--ghost btn--block" id="flyBtn">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <span id="flyBtnText">Zbliż do tej gwiazdy</span>
+    </button>
+  </aside>
+
+  <nav class="dock panel" aria-label="Ustawienia widoku">
+    <label class="switch" title="Pokaż nazwy najjaśniejszych gwiazd"><input type="checkbox" id="labelsToggle" checked><span class="switch__ui"></span>Nazwy gwiazd</label>
+    <label class="switch" title="Pierścienie odległości od Słońca"><input type="checkbox" id="ringsToggle" checked><span class="switch__ui"></span>Pierścienie odległości</label>
+    <span class="dock__sep"></span>
+    <button type="button" class="btn btn--ghost btn--sm btn--solar" id="solarBtn" aria-pressed="false" title="Przeleć do Słońca i pokaż planety na ich orbitach">Układ Słoneczny</button>
+    <button type="button" class="btn btn--ghost btn--sm" id="homeBtn" title="Wróć do widoku początkowego: mapa gwiazd wokół Słońca">Widok startowy</button>
+    <button type="button" class="btn btn--ghost btn--sm" id="helpBtn" title="Sterowanie i informacje">Pomoc</button>
+  </nav>
+
+  <p class="status" id="status" aria-hidden="true"></p>
+  <footer class="credit">
+    Dane: <a href="https://www.astronexus.com/projects/hyg" target="_blank" rel="noopener">HYG Database v4.1</a>, astronexus,
+    <a href="https://creativecommons.org/licenses/by-sa/4.0/deed.pl" target="_blank" rel="noopener">CC BY-SA 4.0</a>
+  </footer>
+
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+
+  <div id="hint" class="hint panel" hidden>
+    <ul>
+      <li><b>Przeciągnij</b> myszą, aby obracać mapę</li>
+      <li><b>Kółko myszy</b> przybliża i oddala</li>
+      <li><b>Kliknij gwiazdę</b>, aby ją zaznaczyć i przypisać flagę</li>
+      <li><b>Przybliż do Słońca</b> albo kliknij „Układ Słoneczny”, aby zobaczyć planety</li>
+    </ul>
+    <button type="button" class="btn btn--primary btn--sm" id="hintOk">Rozumiem</button>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="assertive"></div>
+
+  <div id="loading" class="loading">
+    <div class="loading__box">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="loadingText">Wczytywanie katalogu gwiazd…</p>
+    </div>
+  </div>
+
+  <dialog id="flagDialog" class="dialog dialog--flag" aria-labelledby="flagDialogTitle">
+    <form method="dialog" id="flagForm" novalidate>
+      <header class="dialog__head">
+        <div>
+          <p class="eyebrow" id="flagDialogMode">Nowa flaga</p>
+          <h2 id="flagDialogTitle">Flaga</h2>
+        </div>
+        <button type="button" class="icon-btn" id="flagCancelX" aria-label="Zamknij bez zapisywania">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="dialog__body">
+        <div class="preview" aria-label="Podgląd flagi">
+          <div class="preview__sky">
+            <span class="preview__star"></span>
+            <div class="flag flag--preview" id="flagPreview"></div>
+          </div>
+          <p class="preview__note">Tak flaga będzie wyglądać na mapie.</p>
+        </div>
+        <div class="editor">
+          <fieldset>
+            <legend>Gotowe flagi</legend>
+            <div class="choices choices--presets" id="presetChoices"></div>
+          </fieldset>
+          <fieldset>
+            <legend>Własna flaga</legend>
+            <div class="field-row">
+              <span class="field-row__label">Kształt</span>
+              <div class="choices" id="shapeChoices"></div>
+            </div>
+            <div class="field-row">
+              <span class="field-row__label">Wzór</span>
+              <div class="choices" id="patternChoices"></div>
+            </div>
+            <div class="field-row">
+              <span class="field-row__label">Kolory</span>
+              <div class="colors">
+                <label class="color"><input type="color" id="color1" value="#e5484d"><span>główny</span></label>
+                <label class="color"><input type="color" id="color2" value="#ffffff"><span>drugi</span></label>
+                <div class="swatches" id="swatches" aria-label="Szybki wybór koloru głównego"></div>
+              </div>
+            </div>
+            <div class="field-row">
+              <span class="field-row__label">Symbol</span>
+              <div class="choices" id="symbolChoices"></div>
+            </div>
+            <div class="field-row">
+              <span class="field-row__label">Obraz</span>
+              <div class="image-row">
+                <button type="button" class="btn btn--ghost btn--sm" id="imageBtn">Wgraj własny obraz…</button>
+                <button type="button" class="btn btn--ghost btn--sm" id="imageClear" hidden>Usuń obraz</button>
+                <input type="file" id="imageFile" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+                <small>Dowolny obrazek (np. herb, zdjęcie, prawdziwa flaga). Zostanie zmniejszony i przycięty do kształtu flagi.</small>
+              </div>
+            </div>
+          </fieldset>
+          <label class="field">
+            <span>Podpis flagi <small id="labelHint">(opcjonalnie; pusty = nazwa gwiazdy)</small></span>
+            <input type="text" id="flagLabel" maxlength="40" autocomplete="off">
+          </label>
+          <label class="field">
+            <span><span id="noteTitle">Opis gwiazdy</span> <small id="noteCount">0 / 2000</small></span>
+            <textarea id="flagNote" rows="3" maxlength="2000" placeholder="Twoja notatka, np. dlaczego ta gwiazda jest dla Ciebie ważna…"></textarea>
+          </label>
+        </div>
+      </div>
+      <footer class="dialog__foot">
+        <button type="button" class="btn btn--danger" id="flagDelete" hidden>Usuń flagę</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn--ghost" id="flagCancel">Anuluj</button>
+        <button type="submit" class="btn btn--primary" id="flagSave">Zapisz flagę</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="confirmDialog" class="dialog dialog--small" aria-labelledby="confirmTitle">
+    <form method="dialog">
+      <h2 id="confirmTitle"></h2>
+      <p id="confirmText"></p>
+      <footer class="dialog__foot">
+        <span class="spacer"></span>
+        <button type="submit" value="no" class="btn btn--ghost" id="confirmNo">Anuluj</button>
+        <button type="submit" value="yes" class="btn btn--danger" id="confirmYes">Usuń</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="helpDialog" class="dialog dialog--help" aria-labelledby="helpTitle">
+    <form method="dialog">
+      <header class="dialog__head">
+        <h2 id="helpTitle">Jak korzystać z mapy</h2>
+        <button type="submit" class="icon-btn" aria-label="Zamknij">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="help">
+        <h3>Sterowanie</h3>
+        <dl class="keys">
+          <dt>Przeciągnięcie myszą</dt><dd>obracanie widoku wokół środka (gwiazdy lub planety)</dd>
+          <dt>Kółko myszy</dt><dd>przybliżanie i oddalanie</dd>
+          <dt>Kliknięcie gwiazdy lub planety</dt><dd>zaznaczenie i dane w panelu</dd>
+          <dt>Dwuklik</dt><dd>przelot blisko gwiazdy lub planety</dd>
+          <dt><kbd>/</kbd></dt><dd>przejście do wyszukiwarki</dd>
+          <dt><kbd>Esc</kbd></dt><dd>odznaczenie</dd>
+        </dl>
+        <h3>Układ Słoneczny</h3>
+        <p>Przybliżaj mapę przy Słońcu albo kliknij <b>Układ Słoneczny</b> — widok płynnie przejdzie do planet: osiem planet i Pluton na swoich orbitach, w prawdziwej skali odległości i w położeniach na dzisiejszy dzień. Oddalanie kółkiem myszy wraca na mapę gwiazd. Planety można zaznaczać, wyszukiwać (np. „Jowisz”, „Mars”) i oznaczać flagami tak samo jak gwiazdy; tarcze planet są powiększone, bo w tej skali byłyby mniejsze niż piksel.</p>
+        <h3>Flagi</h3>
+        <p>Zaznacz gwiazdę lub planetę i wybierz <b>Przypisz flagę</b>. Możesz użyć gotowej flagi albo zaprojektować własną: kształt, wzór, kolory, symbol lub własny obraz, do tego podpis i własny opis. Flagę można w każdej chwili zmienić lub usunąć.</p>
+        <p>Flagi zapisują się automatycznie w tej przeglądarce (bez konta i logowania) i zostają po jej zamknięciu. <b>Eksportuj do pliku</b> tworzy kopię zapasową, którą można wczytać na innym komputerze przez <b>Importuj z pliku</b>.</p>
+        <h3>Wyszukiwanie</h3>
+        <p>Działają nazwy planet (Jowisz, Mars, Ziemia), nazwy własne gwiazd (Sirius, Syriusz, Gwiazda Polarna), oznaczenia (alfa Centauri, α Cen, 61 Cyg, beta Oriona), nazwy gwiazdozbiorów (Lutnia, Lyra) oraz numery katalogowe (HIP 32349, HD 48915). Wielkość liter i polskie znaki nie mają znaczenia.</p>
+        <h3>O mapie</h3>
+        <p id="aboutData">Mapa pokazuje rzeczywiste położenia gwiazd w przestrzeni wokół Słońca oraz planety Układu Słonecznego. Barwa punktu odpowiada barwie gwiazdy, a wielkość — jej jasności widzianej z miejsca, w którym znajduje się kamera.</p>
+        <p class="muted">Dane gwiazd: <a href="https://www.astronexus.com/projects/hyg" target="_blank" rel="noopener">HYG Database v4.1</a> (astronexus), licencja <a href="https://creativecommons.org/licenses/by-sa/4.0/deed.pl" target="_blank" rel="noopener">CC BY-SA 4.0</a>. Położenia planet: przybliżone elementy orbit JPL (E. M. Standish), domena publiczna. Grafika 3D: Three.js (MIT).</p>
+      </div>
+      <footer class="dialog__foot">
+        <span class="spacer"></span>
+        <button type="submit" class="btn btn--primary">Zamknij</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <noscript><p class="noscript">Mapa gwiazd wymaga włączonej obsługi JavaScript.</p></noscript>
+  <script>
+    // Gdy moduły się nie wczytają (plik otwarty bez serwera, brak internetu, zablokowany CDN), pokaż jasny komunikat zamiast wiecznego kółka.
+    window.__mapFail = function (message) {
+      var box = document.getElementById('loading');
+      if (!box || box.classList.contains('is-done')) return;
+      box.classList.add('is-error');
+      document.getElementById('loadingText').textContent = message;
+    };
+    window.__mapLoadError = function () {
+      window.__mapFail(location.protocol === 'file:'
+        ? 'Mapy nie da się otworzyć bezpośrednio z pliku. Uruchom ją przez lokalny serwer: „node serve.mjs 5182”, a potem otwórz http://localhost:5182.'
+        : 'Nie udało się wczytać mapy. Sprawdź połączenie z internetem (biblioteka Three.js jest pobierana z sieci) i odśwież stronę.');
+    };
+    if (location.protocol === 'file:') window.__mapLoadError();
+    window.__mapTimer = setTimeout(function () {
+      if (!window.mapaGwiazd) window.__mapFail('Wczytywanie trwa dłużej niż zwykle. Sprawdź połączenie z internetem (biblioteka Three.js jest pobierana z sieci) lub uruchom stronę przez lokalny serwer: „node serve.mjs 5182”.');
+    }, 8000);
+  </script>
+  <script type="module" src="js/app.js?v=3" onerror="window.__mapLoadError()"></script>
+</body>
+</html>
